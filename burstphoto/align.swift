@@ -74,6 +74,7 @@ let merge_frequency_domain_state = try! device.makeComputePipelineState(function
 let calculate_mismatch_rgba_state = try! device.makeComputePipelineState(function: mfl.makeFunction(name: "calculate_mismatch_rgba")!)
 let normalize_mismatch_state = try! device.makeComputePipelineState(function: mfl.makeFunction(name: "normalize_mismatch")!)
 let correct_hotpixels_state = try! device.makeComputePipelineState(function: mfl.makeFunction(name: "correct_hotpixels")!)
+let identify_hotpixels_state = try! device.makeComputePipelineState(function: mfl.makeFunction(name: "identify_hotpixels")!)
 let deconvolute_frequency_domain_state = try! device.makeComputePipelineState(function: mfl.makeFunction(name: "deconvolute_frequency_domain")!)
 
 
@@ -1303,6 +1304,14 @@ func normalize_mismatch(_ mismatch_texture: MTLTexture, _ mean_mismatch_buffer: 
 }
 
 
+/**
+ * Find the hotpixels in the images and correct them based on the average of adjacent pixels.
+ * Performed in a two-passes in order to avoid needing to copy any of the textures.
+ * Pass 1 identifies the hot pixels and stores their locations.
+ * Pass 2 corrects the hot pixels based on neighbouring values.
+ *
+ * The textures are assumed to be floats and not unsigned integers. -1 will be used to identify non-hotpixels.
+ */
 func correct_hotpixels(_ textures: [MTLTexture]) {
     
     // generate simple average of all textures
@@ -1310,34 +1319,52 @@ func correct_hotpixels(_ textures: [MTLTexture]) {
     average_texture_descriptor.usage = [.shaderRead, .shaderWrite]
     let average_texture = device.makeTexture(descriptor: average_texture_descriptor)!
     fill_with_zeros(average_texture)
-              
-    // iterate over all images
     for comp_idx in 0..<textures.count {
-            
         add_texture(textures[comp_idx], average_texture, textures.count)
     }
+    
+    // Texture to stores whethere a hot pixel was identifies
+    // A hotpixel will have the mean of the 4 neighbours pixels stored
+    // A non-notpixel will have
+    let hot_pixel_identified_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r16Float, width: textures[0].width, height: textures[0].height, mipmapped: false)
+    hot_pixel_identified_descriptor.usage = [.shaderRead, .shaderWrite]
+    let hot_pixel_identified = device.makeTexture(descriptor: hot_pixel_identified_descriptor)!
+    fill_with_zeros(hot_pixel_identified)
     
     // calculate mean value specific for each color channel
     let mean_texture_buffer = texture_mean(convert_rgba(average_texture, 0, 0), "rgba")
     
+    
     // iterate over all images and correct hot pixels in each texture
-    for comp_idx in 0..<textures.count {
-        
-        let tmp_texture = copy_texture(textures[comp_idx])
-        
-        let command_buffer = command_queue.makeCommandBuffer()!
-        let command_encoder = command_buffer.makeComputeCommandEncoder()!
-        let state = correct_hotpixels_state
-        command_encoder.setComputePipelineState(state)
+    for texture in textures {
+        // Pass 1: Identify hot pixels
+        let command_buffer_1 = command_queue.makeCommandBuffer()!
+        let command_encoder_1 = command_buffer_1.makeComputeCommandEncoder()!
+        command_encoder_1.setComputePipelineState(identify_hotpixels_state)
         let threads_per_grid = MTLSize(width: average_texture.width-4, height: average_texture.height-4, depth: 1)
-        let threads_per_thread_group = get_threads_per_thread_group(state, threads_per_grid)
-        command_encoder.setTexture(average_texture, index: 0)
-        command_encoder.setTexture(tmp_texture, index: 1)
-        command_encoder.setTexture(textures[comp_idx], index: 2)
-        command_encoder.setBuffer(mean_texture_buffer, offset: 0, index: 0)
-        command_encoder.dispatchThreads(threads_per_grid, threadsPerThreadgroup: threads_per_thread_group)
-        command_encoder.endEncoding()
-        command_buffer.commit()
+        let threads_per_thread_group_1 = get_threads_per_thread_group(identify_hotpixels_state, threads_per_grid)
+        
+        command_encoder_1.setTexture(average_texture, index: 0)
+        command_encoder_1.setTexture(texture, index: 1)
+        command_encoder_1.setTexture(hot_pixel_identified, index: 2)
+        command_encoder_1.setBuffer(mean_texture_buffer, offset: 0, index: 0)
+        command_encoder_1.dispatchThreads(threads_per_grid, threadsPerThreadgroup: threads_per_thread_group_1)
+        command_encoder_1.endEncoding()
+        command_buffer_1.commit()
+        
+        // Pass 2: Fix hot pixels
+        let command_buffer_2 = command_queue.makeCommandBuffer()!
+        let command_encoder_2 = command_buffer_2.makeComputeCommandEncoder()!
+        command_encoder_2.setComputePipelineState(correct_hotpixels_state)
+        let threads_per_thread_group_2 = get_threads_per_thread_group(correct_hotpixels_state, threads_per_grid)
+        
+        command_encoder_2.setTexture(average_texture, index: 0)
+        command_encoder_2.setTexture(hot_pixel_identified, index: 1)
+        command_encoder_2.setTexture(texture, index: 2)
+        command_encoder_2.setBuffer(mean_texture_buffer, offset: 0, index: 0)
+        command_encoder_2.dispatchThreads(threads_per_grid, threadsPerThreadgroup: threads_per_thread_group_2)
+        command_encoder_2.endEncoding()
+        command_buffer_2.commit()
     }
 }
 

@@ -1331,12 +1331,11 @@ kernel void normalize_mismatch(texture2d<float, access::read_write> mismatch_tex
 }
 
 
-// hot pixel correction based on the idea that hot pixels appear at the same pixel location in all images
-kernel void correct_hotpixels(texture2d<float, access::read> average_texture [[texture(0)]],
-                              texture2d<float, access::read> in_texture [[texture(1)]],
-                              texture2d<float, access::write> out_texture [[texture(2)]],
-                              constant float* mean_texture_buffer [[buffer(0)]],
-                              uint2 gid [[thread_position_in_grid]]) {
+kernel void identify_hotpixels(texture2d<float, access::read> average_texture [[texture(0)]],
+                               texture2d<float, access::read> in_texture [[texture(1)]],
+                               texture2d<float, access::write> hot_pixel_texture [[texture(2)]],
+                               constant float* mean_texture_buffer [[buffer(0)]],
+                               uint2 gid [[thread_position_in_grid]]) {
        
     int const x = gid.x+2;
     int const y = gid.y+2;
@@ -1372,20 +1371,50 @@ kernel void correct_hotpixels(texture2d<float, access::read> average_texture [[t
     float const pixel_value = average_texture.read(uint2(x, y)).r;
     float const pixel_ratio = pixel_value/sum;
     
-    // if hot pixel is detected
+    // Label each pixel as a hotpixel or not
     if (pixel_ratio >= 0.15f & pixel_value >= 2.0f*mean_texture) {
-        
         // calculate mean value of 4 surrounding values
         float sum2 = in_texture.read(uint2(x-2, y+0)).r;
         sum2      += in_texture.read(uint2(x+2, y+0)).r;
         sum2      += in_texture.read(uint2(x+0, y-2)).r;
         sum2      += in_texture.read(uint2(x+0, y+2)).r;
         
+        hot_pixel_texture.write(sum2/4, uint2(x, y));
+    } else {
+        hot_pixel_texture.write(-1.0, uint2(x, y));
+    }
+}
+
+// hot pixel correction based on the idea that hot pixels appear at the same pixel location in all images
+kernel void correct_hotpixels(texture2d<float, access::read> average_texture [[texture(0)]],
+                              texture2d<float, access::read> hot_pixel_texture [[texture(1)]],
+                              texture2d<float, access::read_write> out_texture [[texture(2)]],
+                              uint2 gid [[thread_position_in_grid]]) {
+       
+    int const x = gid.x+2;
+    int const y = gid.y+2;
+    
+    float const hot_pixel_val = hot_pixel_texture.read(uint2(x, y)).r;
+    // Hot pixel detected
+    if (hot_pixel_val >= 0) {
+        // calculate weighted sum of 8 pixels surrounding the potential hot pixel based on the average texture
+        float sum =   average_texture.read(uint2(x-2, y-2)).r;
+        sum      +=   average_texture.read(uint2(x+2, y-2)).r;
+        sum      +=   average_texture.read(uint2(x-2, y+2)).r;
+        sum      +=   average_texture.read(uint2(x+2, y+2)).r;
+        sum      += 2*average_texture.read(uint2(x-2, y+0)).r;
+        sum      += 2*average_texture.read(uint2(x+2, y+0)).r;
+        sum      += 2*average_texture.read(uint2(x+0, y-2)).r;
+        sum      += 2*average_texture.read(uint2(x+0, y+2)).r;
+        
+        // extract value of potential hot pixel from the average texture and divide by sum of surrounding pixels
+        float const pixel_value = average_texture.read(uint2(x, y)).r;
+        float const pixel_ratio = pixel_value/sum;
         // calculate weight for blending to have a smooth transition for not so obvious hot pixels
         float const weight = 10.0f*min(pixel_ratio-0.15f, 0.10f);
         
         // blend values and replace hot pixel value
-        out_texture.write(weight*0.25f*sum2 + (1.0f-weight)*in_texture.read(uint2(x, y)).r, uint2(x, y));
+        out_texture.write(weight*hot_pixel_val + (1.0f-weight)*out_texture.read(uint2(x, y)).r, uint2(x, y));
     }
 }
 
