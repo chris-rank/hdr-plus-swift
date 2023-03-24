@@ -305,6 +305,10 @@ func align_merge_spatial_domain(progress: ProcessingProgress, ref_idx: Int, mosa
     // set reference texture
     let ref_texture = extend_texture(textures[ref_idx], pad_align_x, pad_align_x, pad_align_y, pad_align_y)
     
+    let aligned_texture_uncropped_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: ref_texture.pixelFormat, width: ref_texture.width, height: ref_texture.height, mipmapped: false)
+    aligned_texture_uncropped_descriptor.usage = [.shaderRead, .shaderWrite]
+    let aligned_texture_uncropped = device.makeTexture(descriptor: aligned_texture_uncropped_descriptor)!
+    
     // build reference pyramid
     let ref_pyramid = build_pyramid(ref_texture, downscale_factor_array)
     
@@ -332,7 +336,8 @@ func align_merge_spatial_domain(progress: ProcessingProgress, ref_idx: Int, mosa
         }
        
         // align comparison texture
-        let aligned_texture = crop_texture(align_texture(ref_pyramid, comp_texture, downscale_factor_array, tile_size_array, search_dist_array), pad_align_x, pad_align_x, pad_align_y, pad_align_y)
+        align_texture(ref_pyramid, comp_texture, save_in: aligned_texture_uncropped, downscale_factor_array, tile_size_array, search_dist_array)
+        let aligned_texture = crop_texture(aligned_texture_uncropped, pad_align_x, pad_align_x, pad_align_y, pad_align_y)
         
         // robust-merge the texture
         let merged_texture = robust_merge(textures[ref_idx], ref_texture_blurred, aligned_texture, kernel_size, robustness, noise_sd, mosaic_pattern_width)
@@ -418,6 +423,10 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left: Int,
     tmp_texture_ft_descriptor.usage = [.shaderRead, .shaderWrite]
     let tmp_texture_ft = device.makeTexture(descriptor: tmp_texture_ft_descriptor)!
 
+    let aligned_texture_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: ref_texture.pixelFormat, width: ref_texture.width, height: ref_texture.height, mipmapped: false)
+    aligned_texture_descriptor.usage = [.shaderRead, .shaderWrite]
+    let aligned_texture = device.makeTexture(descriptor: aligned_texture_descriptor)!
+    
     let aligned_texture_rgba_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: (ref_texture.width-2*crop_merge_x)/2, height: (ref_texture.height-2*crop_merge_y)/2, mipmapped: false)
     aligned_texture_rgba_descriptor.usage = [.shaderRead, .shaderWrite]
     let aligned_texture_rgba = device.makeTexture(descriptor: aligned_texture_rgba_descriptor)!
@@ -460,7 +469,8 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left: Int,
         }
         
         // align comparison texture
-        convert_rgba(align_texture(ref_pyramid, comp_texture, downscale_factor_array, tile_size_array, search_dist_array),
+        align_texture(ref_pyramid, comp_texture, save_in: aligned_texture, downscale_factor_array, tile_size_array, search_dist_array)
+        convert_rgba(aligned_texture,
                      save_in: aligned_texture_rgba,
                      crop_merge_x, crop_merge_y)
                  
@@ -852,7 +862,7 @@ func texture_mean(_ in_texture: MTLTexture, _ pixelformat: String) -> MTLBuffer 
 // Functions specific to image alignment
 // ===========================================================================================================
 
-func align_texture(_ ref_pyramid: [MTLTexture], _ comp_texture: MTLTexture, _ downscale_factor_array: Array<Int>, _ tile_size_array: Array<Int>, _ search_dist_array: Array<Int>) -> MTLTexture {
+func align_texture(_ ref_pyramid: [MTLTexture], _ comp_texture: MTLTexture, save_in aligned_texture: MTLTexture, _ downscale_factor_array: Array<Int>, _ tile_size_array: Array<Int>, _ search_dist_array: Array<Int>) {
         
     // initialize tile alignments
     let alignment_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rg16Sint, width: 1, height: 1, mipmapped: false)
@@ -909,9 +919,7 @@ func align_texture(_ ref_pyramid: [MTLTexture], _ comp_texture: MTLTexture, _ do
     
     // warp the aligned layer
     tile_info.tile_size *= downscale_factor_array[0]
-    let aligned_texture = warp_texture(comp_texture, current_alignment, tile_info, downscale_factor_array[0])
-    
-    return aligned_texture
+    warp_texture(comp_texture, current_alignment, save_in: aligned_texture, tile_info, downscale_factor_array[0])
 }
 
 
@@ -1016,11 +1024,7 @@ func correct_upsampling_error(_ ref_layer: MTLTexture, _ comp_layer: MTLTexture,
 }
 
 
-func warp_texture(_ texture_to_warp: MTLTexture, _ alignment: MTLTexture, _ tile_info: TileInfo, _ downscale_factor: Int) -> MTLTexture {
-    
-    let out_texture_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: texture_to_warp.pixelFormat, width: texture_to_warp.width, height: texture_to_warp.height, mipmapped: false)
-    out_texture_descriptor.usage = [.shaderRead, .shaderWrite]
-    let warped_texture = device.makeTexture(descriptor: out_texture_descriptor)!
+func warp_texture(_ texture_to_warp: MTLTexture, _ alignment: MTLTexture, save_in warped_texture: MTLTexture, _ tile_info: TileInfo, _ downscale_factor: Int){
     
     let command_buffer = command_queue.makeCommandBuffer()!
     let command_encoder = command_buffer.makeComputeCommandEncoder()!
@@ -1038,8 +1042,6 @@ func warp_texture(_ texture_to_warp: MTLTexture, _ alignment: MTLTexture, _ tile
     command_encoder.dispatchThreads(threads_per_grid, threadsPerThreadgroup: threads_per_thread_group)
     command_encoder.endEncoding()
     command_buffer.commit()
-    
-    return warped_texture
 }
 
 
