@@ -395,7 +395,10 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left: Int,
     
     let pad_merge_x = pad_align_x - crop_merge_x
     let pad_merge_y = pad_align_y - crop_merge_y
-             
+    
+    // set tile information needed for the merging
+    let tile_info_merge = TileInfo(tile_size: tile_size, tile_size_merge: tile_size_merge, search_dist: 0, n_tiles_x: (texture_width_orig+tile_size_merge+2*pad_merge_x)/(2*tile_size_merge), n_tiles_y: (texture_height_orig+tile_size_merge+2*pad_merge_y)/(2*tile_size_merge), n_pos_1d: 0, n_pos_2d: 0)
+    
     // set and extend reference texture
     let ref_texture = extend_texture(textures[ref_idx], pad_left, pad_right, pad_top, pad_bottom)
         
@@ -415,11 +418,15 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left: Int,
     tmp_texture_ft_descriptor.usage = [.shaderRead, .shaderWrite]
     let tmp_texture_ft = device.makeTexture(descriptor: tmp_texture_ft_descriptor)!
 
-    // set tile information needed for the merging
-    let tile_info_merge = TileInfo(tile_size: tile_size, tile_size_merge: tile_size_merge, search_dist: 0, n_tiles_x: (texture_width_orig+tile_size_merge+2*pad_merge_x)/(2*tile_size_merge), n_tiles_y: (texture_height_orig+tile_size_merge+2*pad_merge_y)/(2*tile_size_merge), n_pos_1d: 0, n_pos_2d: 0)
-  
+    let aligned_texture_rgba_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: (ref_texture.width-2*crop_merge_x)/2, height: (ref_texture.height-2*crop_merge_y)/2, mipmapped: false)
+    aligned_texture_rgba_descriptor.usage = [.shaderRead, .shaderWrite]
+    let aligned_texture_rgba = device.makeTexture(descriptor: aligned_texture_rgba_descriptor)!
+    
     // convert reference texture into RGBA pixel format that SIMD instructions can be applied
-    let ref_texture_rgba = convert_rgba(ref_texture, crop_merge_x, crop_merge_y)
+    let ref_texture_rgba_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: (ref_texture.width-2*crop_merge_x)/2, height: (ref_texture.height-2*crop_merge_y)/2, mipmapped: false)
+    ref_texture_rgba_descriptor.usage = [.shaderRead, .shaderWrite]
+    let ref_texture_rgba = device.makeTexture(descriptor: ref_texture_rgba_descriptor)!
+    convert_rgba(ref_texture, save_in: ref_texture_rgba, crop_merge_x, crop_merge_y)
     
     // estimate noise level of tiles
     let rms_texture = calculate_rms_rgba(ref_texture_rgba, tile_info_merge)
@@ -453,7 +460,9 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left: Int,
         }
         
         // align comparison texture
-        let aligned_texture_rgba = convert_rgba(align_texture(ref_pyramid, comp_texture, downscale_factor_array, tile_size_array, search_dist_array), crop_merge_x, crop_merge_y)
+        convert_rgba(align_texture(ref_pyramid, comp_texture, downscale_factor_array, tile_size_array, search_dist_array),
+                     save_in: aligned_texture_rgba,
+                     crop_merge_x, crop_merge_y)
                  
         // calculate mismatch texture
         let mismatch_texture = calculate_mismatch_rgba(aligned_texture_rgba, ref_texture_rgba, rms_texture, tile_info_merge)
@@ -758,11 +767,7 @@ func copy_texture(_ in_texture: MTLTexture) -> MTLTexture {
 }
 
 
-func convert_rgba(_ in_texture: MTLTexture, _ crop_merge_x: Int, _ crop_merge_y: Int) -> MTLTexture {
-    
-    let out_texture_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: (in_texture.width-2*crop_merge_x)/2, height: (in_texture.height-2*crop_merge_y)/2, mipmapped: false)
-    out_texture_descriptor.usage = [.shaderRead, .shaderWrite]
-    let out_texture = device.makeTexture(descriptor: out_texture_descriptor)!
+func convert_rgba(_ in_texture: MTLTexture, save_in out_texture: MTLTexture, _ crop_merge_x: Int, _ crop_merge_y: Int){
         
     let command_buffer = command_queue.makeCommandBuffer()!
     let command_encoder = command_buffer.makeComputeCommandEncoder()!
@@ -777,8 +782,6 @@ func convert_rgba(_ in_texture: MTLTexture, _ crop_merge_x: Int, _ crop_merge_y:
     command_encoder.dispatchThreads(threads_per_grid, threadsPerThreadgroup: threads_per_thread_group)
     command_encoder.endEncoding()
     command_buffer.commit()
-    
-    return out_texture
 }
 
 
@@ -1332,7 +1335,11 @@ func correct_hotpixels(_ textures: [MTLTexture]) {
     fill_with_zeros(hot_pixel_identified)
     
     // calculate mean value specific for each color channel
-    let mean_texture_buffer = texture_mean(convert_rgba(average_texture, 0, 0), "rgba")
+    let mean_texture_rgba_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: average_texture.width/2, height: average_texture.height/2, mipmapped: false)
+    mean_texture_rgba_descriptor.usage = [.shaderRead, .shaderWrite]
+    let mean_texture_rgba = device.makeTexture(descriptor: mean_texture_rgba_descriptor)!
+    convert_rgba(average_texture, save_in: mean_texture_rgba, 0, 0)
+    let mean_texture_buffer = texture_mean(mean_texture_rgba,"rgba")
     
     
     // iterate over all images and correct hot pixels in each texture
