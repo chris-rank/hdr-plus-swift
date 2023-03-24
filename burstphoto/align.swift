@@ -174,7 +174,7 @@ func perform_denoising(image_urls: [URL], progress: ProcessingProgress, ref_idx:
         // iterate over all images
         for comp_idx in 0..<image_urls.count {
             
-            add_texture(textures[comp_idx], final_texture, image_urls.count)
+            add_texture(textures[comp_idx], to: final_texture, image_urls.count)
             DispatchQueue.main.async { progress.int += Int(80000000/Double(image_urls.count)) }
         }
         
@@ -318,7 +318,7 @@ func align_merge_spatial_domain(progress: ProcessingProgress, ref_idx: Int, mosa
         
         // add the reference texture to the output
         if comp_idx == ref_idx {
-            add_texture(textures[comp_idx], final_texture, textures.count)
+            add_texture(textures[comp_idx], to: final_texture, textures.count)
             DispatchQueue.main.async { progress.int += Int(80000000/Double(textures.count)) }
             continue
         }
@@ -338,7 +338,7 @@ func align_merge_spatial_domain(progress: ProcessingProgress, ref_idx: Int, mosa
         let merged_texture = robust_merge(textures[ref_idx], ref_texture_blurred, aligned_texture, kernel_size, robustness, noise_sd, mosaic_pattern_width)
         
         // add robust-merged texture to the output image
-        add_texture(merged_texture, final_texture, textures.count)
+        add_texture(merged_texture, to: final_texture, textures.count)
         
         // sync GUI progress
         DispatchQueue.main.async { progress.int += Int(80000000/Double(textures.count)) }
@@ -463,7 +463,7 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left: Int,
         normalize_mismatch(mismatch_texture, mean_mismatch)
            
         // add mismatch texture to the total, accumulated mismatch texture
-        add_texture(mismatch_texture, total_mismatch_texture, textures.count)
+        add_texture(mismatch_texture, to: total_mismatch_texture, textures.count)
         
         // start debug capture
         //let capture_manager = MTLCaptureManager.shared()
@@ -492,7 +492,7 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left: Int,
     let output_texture = crop_texture(convert_bayer(backward_ft(final_texture_ft, tmp_texture_ft, tile_info_merge, textures.count, mode: ft_mode)), pad_left-crop_merge_x, pad_right-crop_merge_x, pad_top-crop_merge_y, pad_bottom-crop_merge_y)
         
     // add output texture to the final texture to collect all textures of the four iterations
-    add_texture(output_texture, final_texture, 1)
+    add_texture(output_texture, to: final_texture, 1)
 }
 
 
@@ -711,7 +711,7 @@ func crop_texture(_ in_texture: MTLTexture, _ pad_left: Int, _ pad_right: Int, _
 }
 
 
-func add_texture(_ in_texture: MTLTexture, _ out_texture: MTLTexture, _ n_textures: Int) {
+func add_texture(_ in_texture: MTLTexture, to out_texture: MTLTexture, _ n_textures: Int) {
     
     let command_buffer = command_queue.makeCommandBuffer()!
     let command_encoder = command_buffer.makeComputeCommandEncoder()!
@@ -1320,7 +1320,7 @@ func correct_hotpixels(_ textures: [MTLTexture]) {
     let average_texture = device.makeTexture(descriptor: average_texture_descriptor)!
     fill_with_zeros(average_texture)
     for texture in textures {
-        add_texture(texture, average_texture, textures.count)
+        add_texture(texture, to: average_texture, textures.count)
     }
     
     // Texture to stores whethere a hot pixel was identifies
