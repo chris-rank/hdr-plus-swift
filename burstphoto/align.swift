@@ -1319,8 +1319,8 @@ func correct_hotpixels(_ textures: [MTLTexture]) {
     average_texture_descriptor.usage = [.shaderRead, .shaderWrite]
     let average_texture = device.makeTexture(descriptor: average_texture_descriptor)!
     fill_with_zeros(average_texture)
-    for comp_idx in 0..<textures.count {
-        add_texture(textures[comp_idx], average_texture, textures.count)
+    for texture in textures {
+        add_texture(texture, average_texture, textures.count)
     }
     
     // Texture to stores whethere a hot pixel was identifies
