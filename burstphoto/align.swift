@@ -301,9 +301,25 @@ func align_merge_spatial_domain(progress: ProcessingProgress, ref_idx: Int, mosa
     
     var pad_align_y = Int(ceil(Float(texture_height_orig)/Float(tile_factor)))
     pad_align_y = (pad_align_y*Int(tile_factor) - texture_height_orig)/2
-      
+    
+    let comp_texture_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r16Float,
+                                                                          width: textures[ref_idx].width+2*pad_align_x,
+                                                                          height: textures[ref_idx].height+2*pad_align_y,
+                                                                          mipmapped: false)
+    comp_texture_descriptor.usage = [.shaderRead, .shaderWrite]
+    let comp_texture = device.makeTexture(descriptor: comp_texture_descriptor)!
+    fill_with_zeros(comp_texture)
+    
+    let ref_texture_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r16Float,
+                                                                          width: textures[ref_idx].width+2*pad_align_x,
+                                                                          height: textures[ref_idx].height+2*pad_align_y,
+                                                                          mipmapped: false)
+    ref_texture_descriptor.usage = [.shaderRead, .shaderWrite]
+    let ref_texture = device.makeTexture(descriptor: ref_texture_descriptor)!
+    fill_with_zeros(ref_texture)
+    
     // set reference texture
-    let ref_texture = extend_texture(textures[ref_idx], pad_align_x, pad_align_x, pad_align_y, pad_align_y)
+    extend_texture(textures[ref_idx], onto: ref_texture, pad_align_x, pad_align_y)
     
     let aligned_texture_uncropped_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: ref_texture.pixelFormat, width: ref_texture.width, height: ref_texture.height, mipmapped: false)
     aligned_texture_uncropped_descriptor.usage = [.shaderRead, .shaderWrite]
@@ -326,14 +342,14 @@ func align_merge_spatial_domain(progress: ProcessingProgress, ref_idx: Int, mosa
             DispatchQueue.main.async { progress.int += Int(80000000/Double(textures.count)) }
             continue
         }
-            
-        // set comparison texture
-        let comp_texture = extend_texture(textures[comp_idx], pad_align_x, pad_align_x, pad_align_y, pad_align_y)
         
         // check that the comparison image has the same resolution as the reference image
-        if (ref_texture.width != comp_texture.width) || (ref_texture.height != comp_texture.height) {
+        if (textures[comp_idx].width != textures[comp_idx].width) || (textures[comp_idx].height != textures[comp_idx].height) {
             throw AlignmentError.inconsistent_resolutions
         }
+        
+        // set comparison texture
+        extend_texture(textures[comp_idx], onto: comp_texture, pad_align_x, pad_align_y)
        
         // align comparison texture
         align_texture(ref_pyramid, comp_texture, save_in: aligned_texture_uncropped, downscale_factor_array, tile_size_array, search_dist_array)
@@ -404,8 +420,24 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left: Int,
     // set tile information needed for the merging
     let tile_info_merge = TileInfo(tile_size: tile_size, tile_size_merge: tile_size_merge, search_dist: 0, n_tiles_x: (texture_width_orig+tile_size_merge+2*pad_merge_x)/(2*tile_size_merge), n_tiles_y: (texture_height_orig+tile_size_merge+2*pad_merge_y)/(2*tile_size_merge), n_pos_1d: 0, n_pos_2d: 0)
     
+    let comp_texture_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r16Float,
+                                                                          width:  textures[ref_idx].width  + pad_left + pad_right,
+                                                                          height: textures[ref_idx].height + pad_top  + pad_bottom,
+                                                                          mipmapped: false)
+    comp_texture_descriptor.usage = [.shaderRead, .shaderWrite]
+    let comp_texture = device.makeTexture(descriptor: comp_texture_descriptor)!
+    fill_with_zeros(comp_texture)
+    
+    let ref_texture_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r16Float,
+                                                                          width:  textures[ref_idx].width  + pad_left + pad_right,
+                                                                          height: textures[ref_idx].height + pad_top  + pad_bottom,
+                                                                          mipmapped: false)
+    ref_texture_descriptor.usage = [.shaderRead, .shaderWrite]
+    let ref_texture = device.makeTexture(descriptor: ref_texture_descriptor)!
+    fill_with_zeros(ref_texture)
+    
     // set and extend reference texture
-    let ref_texture = extend_texture(textures[ref_idx], pad_left, pad_right, pad_top, pad_bottom)
+    extend_texture(textures[ref_idx], onto: ref_texture, pad_left, pad_top)
         
     // build reference pyramid
     let ref_pyramid = build_pyramid(ref_texture, downscale_factor_array)
@@ -461,7 +493,7 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left: Int,
         }
          
         // set and extend comparison texture
-        let comp_texture = extend_texture(textures[comp_idx], pad_left, pad_right, pad_top, pad_bottom)
+        extend_texture(textures[comp_idx], onto: comp_texture, pad_left, pad_top)
         
         // check that the comparison image has the same resolution as the reference image
         if (ref_texture.width != comp_texture.width) || (ref_texture.height != comp_texture.height) {
@@ -681,13 +713,8 @@ func blur_mosaic_texture(_ in_texture: MTLTexture, _ kernel_size: Int, _ mosaic_
 }
 
 
-func extend_texture(_ in_texture: MTLTexture, _ pad_left: Int, _ pad_right: Int, _ pad_top: Int, _ pad_bottom: Int) -> MTLTexture {
-    
-    let out_texture_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r16Float, width: in_texture.width+pad_left+pad_right, height: in_texture.height+pad_top+pad_bottom, mipmapped: false)
-    out_texture_descriptor.usage = [.shaderRead, .shaderWrite]
-    let out_texture = device.makeTexture(descriptor: out_texture_descriptor)!
-    fill_with_zeros(out_texture)
-        
+func extend_texture(_ in_texture: MTLTexture, onto out_texture: MTLTexture, _ pad_left: Int, _ pad_top: Int) {
+            
     let command_buffer = command_queue.makeCommandBuffer()!
     let command_encoder = command_buffer.makeComputeCommandEncoder()!
     let state = extend_texture_state
@@ -701,8 +728,6 @@ func extend_texture(_ in_texture: MTLTexture, _ pad_left: Int, _ pad_right: Int,
     command_encoder.dispatchThreads(threads_per_grid, threadsPerThreadgroup: threads_per_thread_group)
     command_encoder.endEncoding()
     command_buffer.commit()
-
-    return out_texture
 }
 
 
