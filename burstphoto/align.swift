@@ -24,6 +24,18 @@ struct TileInfo {
     var n_pos_2d: Int
 }
 
+struct DirectionalPadValues {
+    let left:   Int
+    let right:  Int
+    let top:    Int
+    let bottom: Int
+}
+
+struct DimensionalPadValues {
+    let x: Int
+    let y: Int
+}
+
 /**
  * Buffer textures used by the frequency merge algorithm packaged together for readability and compactness.
  * These buffers are used so that they can be allocated onces at the beggining of the merging sequence and then re-used, significantly reducing the amount of memory that gets allocated & deallocated as the application runs.
@@ -306,7 +318,7 @@ func perform_denoising(image_urls: [URL], progress: ProcessingProgress, ref_idx:
         var pad_align_y = Int(ceil(Float(texture_height_orig)/Float(tile_factor)))
         pad_align_y = (pad_align_y*Int(tile_factor) - texture_height_orig)/2
         
-        let (ref_pyramid, comp_pyramid) = generate_pyramid_buffers(for_ref_texture: textures[ref_idx],
+        let (ref_pyramid, comp_pyramid) = generate_pyramid_buffers(with_metadata_from: textures[ref_idx],
                                                                    with_downscale_factor_array: downscale_factor_array,
                                                                    pad_align_x: pad_align_x, pad_align_y: pad_align_y, tile_size: tile_size)
         
@@ -453,7 +465,7 @@ func align_merge_spatial_domain(progress: ProcessingProgress, ref_idx: Int, mosa
 /**
  * Helper function to create buffers needed for generating the pyramids.
  */
-func generate_pyramid_buffers(for_ref_texture ref_texture: MTLTexture, with_downscale_factor_array downscale_factor_array: Array<Int>, pad_align_x: Int, pad_align_y: Int, tile_size: Int) -> (Array<MTLTexture>, Array<MTLTexture>) {
+func generate_pyramid_buffers(with_metadata_from ref_texture: MTLTexture, with_downscale_factor_array downscale_factor_array: Array<Int>, pad_align_x: Int, pad_align_y: Int, tile_size: Int) -> (Array<MTLTexture>, Array<MTLTexture>) {
     var _ref_pyramid:  Array<MTLTexture> = []
     var _comp_pyramid: Array<MTLTexture> = []
     
@@ -483,12 +495,11 @@ func generate_pyramid_buffers(for_ref_texture ref_texture: MTLTexture, with_down
     return (_ref_pyramid, _comp_pyramid)
 }
 
-// convenience function for the frequency-based merging approach
-func align_merge_frequency_domain(progress: ProcessingProgress, shift_left_not_right: Bool, shift_top_not_bottom: Bool, ref_idx: Int, mosaic_pattern_width: Int, search_distance: Int, tile_size: Int, tile_size_merge: Int, robustness_norm: Double, read_noise: Double, max_motion_norm: Double, ft_mode: String, textures: [MTLTexture], final_texture: MTLTexture) throws {
-    
+
+func create_buffers(ref_texture: MTLTexture, shift_left_not_right: Bool, shift_top_not_bottom: Bool, mosaic_pattern_width: Int, search_distance: Int, tile_size: Int, tile_size_merge: Int) -> (FrequencyMergeTextureBuffers, DirectionalPadValues, DirectionalPadValues, DimensionalPadValues, TileInfo, Array<Int>, Array<Int>, Array<Int>) {
     // set original texture size
-    let texture_width_orig = textures[ref_idx].width
-    let texture_height_orig = textures[ref_idx].height
+    let texture_width_orig = ref_texture.width
+    let texture_height_orig = ref_texture.height
                      
     // set alignment params
     let min_image_dim = min(texture_width_orig, texture_height_orig)
@@ -512,47 +523,49 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left_not_r
     // For the alignment, the frame may be extended further by pad_align due to the following reason: the alignment is performed on different resolution levels and alignment vectors are upscaled by a simple multiplication by 2. As a consequence, the frame at all resolution levels has to be a multiple of the tile sizes of these resolution levels.
     let tile_factor = div*Int(tile_size_array.last!)
     
-    var pad_align_x = Int(ceil(Float(texture_width_orig+tile_size_merge)/Float(tile_factor)))
-    pad_align_x = (pad_align_x*Int(tile_factor) - texture_width_orig - tile_size_merge)/2
+    var _pad_align_x = Int(ceil(Float(texture_width_orig+tile_size_merge)/Float(tile_factor)))
+    _pad_align_x = (_pad_align_x*Int(tile_factor) - texture_width_orig - tile_size_merge)/2
     
-    var pad_align_y = Int(ceil(Float(texture_height_orig+tile_size_merge)/Float(tile_factor)))
-    pad_align_y = (pad_align_y*Int(tile_factor) - texture_height_orig - tile_size_merge)/2
+    var _pad_align_y = Int(ceil(Float(texture_height_orig+tile_size_merge)/Float(tile_factor)))
+    _pad_align_y = (_pad_align_y*Int(tile_factor) - texture_height_orig - tile_size_merge)/2
+    
+    let pad_align = DimensionalPadValues(x: _pad_align_x, y: _pad_align_y)
   
     // calculate padding for the merging in the frequency domain, which can be applied to the actual image frame + a smaller margin compared to the alignment
-    let crop_merge_x = Int(floor(Float(pad_align_x)/Float(2*tile_size_merge))) * 2 * tile_size_merge
-    let crop_merge_y = Int(floor(Float(pad_align_y)/Float(2*tile_size_merge))) * 2 * tile_size_merge
+    let crop_merge = DimensionalPadValues(x: Int(floor(Float(pad_align.x)/Float(2*tile_size_merge))) * 2 * tile_size_merge,
+                                          y: Int(floor(Float(pad_align.y)/Float(2*tile_size_merge))) * 2 * tile_size_merge)
     
-    let pad_merge_x = pad_align_x - crop_merge_x
-    let pad_merge_y = pad_align_y - crop_merge_y
+    let pad_merge = DimensionalPadValues(x: pad_align.x - crop_merge.x,
+                                         y: pad_align.y - crop_merge.y)
     
     // set tile information needed for the merging
     let tile_info_merge = TileInfo(
         tile_size: tile_size,
         tile_size_merge: tile_size_merge,
         search_dist: 0,
-        n_tiles_x: (texture_width_orig+tile_size_merge+2*pad_merge_x)/(2*tile_size_merge),
-        n_tiles_y: (texture_height_orig+tile_size_merge+2*pad_merge_y)/(2*tile_size_merge),
+        n_tiles_x: (texture_width_orig  + tile_size_merge + 2*pad_merge.x) / (2*tile_size_merge),
+        n_tiles_y: (texture_height_orig + tile_size_merge + 2*pad_merge.y) / (2*tile_size_merge),
         n_pos_1d: 0,
         n_pos_2d: 0
     )
     
-    let shift_left   = shift_left_not_right ? tile_size_merge : 0
-    let shift_right  = shift_left_not_right ? 0               : tile_size_merge
-    let shift_top    = shift_top_not_bottom ? tile_size_merge : 0
-    let shift_bottom = shift_top_not_bottom ? 0               : tile_size_merge
+    let shift = DirectionalPadValues(left:   shift_left_not_right ? tile_size_merge : 0,
+                                     right:  shift_left_not_right ? 0               : tile_size_merge,
+                                     top:    shift_top_not_bottom ? tile_size_merge : 0,
+                                     bottom: shift_top_not_bottom ? 0               : tile_size_merge)
 
     // add shifts for artifact suppression
-    let pad_left   = pad_align_x + shift_left
-    let pad_right  = pad_align_x + shift_right
-    let pad_top    = pad_align_y + shift_top
-    let pad_bottom = pad_align_y + shift_bottom
+    let pad = DirectionalPadValues(left:   pad_align.x + shift.left,
+                                   right:  pad_align.x + shift.right,
+                                   top:    pad_align.y + shift.top,
+                                   bottom: pad_align.y + shift.bottom)
     
     // TODO: Despite not immediately looking like it, all of the textures are independant of the value of `shift_left_not_right` and `shift_top_not_bottom`.
     //       The padding is always the same, the only impact those values have is how the orignal texture is placed within the
     
     let ref_texture_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r32Float,
-                                                                          width:  texture_width_orig + pad_left + pad_right,
-                                                                          height: texture_height_orig + pad_top  + pad_bottom,
+                                                                          width:  texture_width_orig + pad.left + pad.right,
+                                                                          height: texture_height_orig + pad.top  + pad.bottom,
                                                                           mipmapped: false)
     ref_texture_descriptor.usage = [.shaderRead, .shaderWrite]
     let _ref_texture = device.makeTexture(descriptor: ref_texture_descriptor)!
@@ -565,8 +578,8 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left_not_r
     fill_with_zeros(_aligned_texture)
     
     let final_frequency_texture_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba32Float,
-                                                                                      width:  (texture_width_orig  + tile_size_merge + 2*pad_merge_x),
-                                                                                      height: (texture_height_orig + tile_size_merge + 2*pad_merge_y)/2,
+                                                                                      width:  (texture_width_orig  + tile_size_merge + 2*pad_merge.x),
+                                                                                      height: (texture_height_orig + tile_size_merge + 2*pad_merge.y)/2,
                                                                                       mipmapped: false)
     final_frequency_texture_descriptor.usage = [.shaderRead, .shaderWrite]
     let _final_frequency_texture = device.makeTexture(descriptor: final_frequency_texture_descriptor)!
@@ -577,8 +590,8 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left_not_r
     let _aligned_texture_ft = texture_like(_final_frequency_texture)
        
     let aligned_texture_rgba_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba32Float,
-                                                                                   width:  (_ref_texture.width  - 2*crop_merge_x)/2,
-                                                                                   height: (_ref_texture.height - 2*crop_merge_y)/2,
+                                                                                   width:  (_ref_texture.width  - 2*crop_merge.x)/2,
+                                                                                   height: (_ref_texture.height - 2*crop_merge.y)/2,
                                                                                    mipmapped: false)
     aligned_texture_rgba_descriptor.usage = [.shaderRead, .shaderWrite]
     let _aligned_texture_rgba = device.makeTexture(descriptor: aligned_texture_rgba_descriptor)!
@@ -596,9 +609,9 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left_not_r
     let _total_mismatch_rgba_texture = texture_like(_rms_rgba_texture)
     fill_with_zeros(_total_mismatch_rgba_texture)
 
-    let (_ref_pyramid, _comp_pyramid) = generate_pyramid_buffers(for_ref_texture: textures[ref_idx],
+    let (_ref_pyramid, _comp_pyramid) = generate_pyramid_buffers(with_metadata_from: ref_texture,
                                                                  with_downscale_factor_array: downscale_factor_array,
-                                                                 pad_align_x: pad_align_x, pad_align_y: pad_align_y, tile_size: tile_size_merge)
+                                                                 pad_align_x: pad_align.x, pad_align_y: pad_align.y, tile_size: tile_size_merge)
     
     let buffers = FrequencyMergeTextureBuffers(
         // Frequency-textures
@@ -614,18 +627,32 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left_not_r
         comp_texture:       _comp_texture,
         aligned_texture:    _aligned_texture,
         // Pyramid-textures
-        ref_pyramid: _ref_pyramid,
+        ref_pyramid:  _ref_pyramid,
         comp_pyramid: _comp_pyramid
     )
     
+    return (buffers, pad, shift, crop_merge, tile_info_merge, downscale_factor_array, tile_size_array, search_dist_array)
+}
+
+// convenience function for the frequency-based merging approach
+func align_merge_frequency_domain(progress: ProcessingProgress, shift_left_not_right: Bool, shift_top_not_bottom: Bool, ref_idx: Int, mosaic_pattern_width: Int, search_distance: Int, tile_size: Int, tile_size_merge: Int, robustness_norm: Double, read_noise: Double, max_motion_norm: Double, ft_mode: String, textures: [MTLTexture], final_texture: MTLTexture) throws {
+    
+    let (buffers, pad, shift, crop_merge, tile_info_merge, downscale_factor_array, tile_size_array, search_dist_array) = create_buffers(ref_texture: textures[ref_idx],
+                      shift_left_not_right: shift_left_not_right,
+                      shift_top_not_bottom: shift_top_not_bottom,
+                      mosaic_pattern_width: mosaic_pattern_width,
+                      search_distance: search_distance,
+                      tile_size: tile_size,
+                      tile_size_merge: tile_size_merge)
+    
     // set and extend reference texture
-    extend_texture(textures[ref_idx], onto: buffers.ref_texture, pad_left, pad_top)
+    extend_texture(textures[ref_idx], onto: buffers.ref_texture, pad.left, pad.top)
         
     // build reference pyramid
     build_pyramid(for_texture: buffers.ref_texture, save_in: buffers.ref_pyramid, downscale_factor_array)
     
     // convert reference texture into RGBA pixel format that SIMD instructions can be applied
-    convert_rgba(buffers.ref_texture, save_in: buffers.ref_rgba_texture, crop_merge_x, crop_merge_y)
+    convert_rgba(buffers.ref_texture, save_in: buffers.ref_rgba_texture, crop_merge.x, crop_merge.y)
     
     // estimate noise level of tiles
     let rms_texture = calculate_rms_rgba(buffers.ref_rgba_texture, tile_info_merge)
@@ -651,7 +678,7 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left_not_r
         }
          
         // set and extend comparison texture
-        extend_texture(textures[comp_idx], onto: buffers.comp_texture, pad_left, pad_top)
+        extend_texture(textures[comp_idx], onto: buffers.comp_texture, pad.left, pad.top)
         
         // check that the comparison image has the same resolution as the reference image
         // TODO: This should to beginning of the application as part of file IO
@@ -662,13 +689,13 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left_not_r
         
         // align comparison texture
         align_texture(buffers.ref_pyramid, buffers.comp_pyramid, buffers.comp_texture, save_in: buffers.aligned_texture, downscale_factor_array, tile_size_array, search_dist_array)
-        convert_rgba(buffers.aligned_texture, save_in: buffers.aligned_rgba_texture, crop_merge_x, crop_merge_y)
+        convert_rgba(buffers.aligned_texture, save_in: buffers.aligned_rgba_texture, crop_merge.x, crop_merge.y)
                  
         // calculate mismatch texture
         let mismatch_texture = calculate_mismatch_rgba(buffers.aligned_rgba_texture, buffers.ref_rgba_texture, rms_texture, tile_info_merge)
 
         // normalize mismatch texture
-        let mean_mismatch = texture_mean(crop_texture(mismatch_texture, shift_left/tile_size_merge, shift_right/tile_size_merge, shift_top/tile_size_merge, shift_bottom/tile_size_merge), "r")
+        let mean_mismatch = texture_mean(crop_texture(mismatch_texture, shift.left/tile_size_merge, shift.right/tile_size_merge, shift.top/tile_size_merge, shift.bottom/tile_size_merge), "r")
         normalize_mismatch(mismatch_texture, mean_mismatch)
            
         // add mismatch texture to the total, accumulated mismatch texture
@@ -704,7 +731,7 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left_not_r
     // NOTE: Re-using `aligned_texture` since it is the correct size, it saves us from allocating another texture
     convert_bayer(buffers.aligned_rgba_texture, save_in: buffers.aligned_texture)
     // Add the cropped region to the final texture
-    add_crop(buffers.aligned_texture, to: final_texture, x_offset: pad_left-crop_merge_x, y_offset: pad_top-crop_merge_y)
+    add_crop(buffers.aligned_texture, to: final_texture, x_offset: pad.left-crop_merge.x, y_offset: pad.top-crop_merge.y)
 }
 
 
