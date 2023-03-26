@@ -270,15 +270,20 @@ func perform_denoising(image_urls: [URL], progress: ProcessingProgress, ref_idx:
         // correction of hot pixels
         correct_hotpixels(textures)
         
-        // perform align and merge 4 times in a row with slight displacement of the frame to prevent artifacts in the merging process. The shift equals the tile size used in the merging process here, which later translates into tile_size_merge/2 when each color channel is processed independently
-        try align_merge_frequency_domain(progress: progress, shift_left_not_right: true, shift_top_not_bottom: true, ref_idx: ref_idx, mosaic_pattern_width: mosaic_pattern_width, search_distance: search_distance_int, tile_size: tile_size, tile_size_merge: tile_size_merge, robustness_norm: robustness_norm, read_noise: read_noise, max_motion_norm: max_motion_norm, ft_mode: ft_mode, textures: textures, final_texture: final_texture)
+        let (buffers, crop_merge, pad_align, tile_info_merge, downscale_factor_array, tile_size_array, search_dist_array) = create_buffers(ref_texture: textures[ref_idx],
+                          mosaic_pattern_width: mosaic_pattern_width,
+                          search_distance: search_distance_int,
+                          tile_size: tile_size,
+                          tile_size_merge: tile_size_merge)
         
-        try align_merge_frequency_domain(progress: progress, shift_left_not_right: false, shift_top_not_bottom: true, ref_idx: ref_idx, mosaic_pattern_width: mosaic_pattern_width, search_distance: search_distance_int, tile_size: tile_size, tile_size_merge: tile_size_merge, robustness_norm: robustness_norm, read_noise: read_noise, max_motion_norm: max_motion_norm, ft_mode: ft_mode, textures: textures, final_texture: final_texture)
-         
-        try align_merge_frequency_domain(progress: progress, shift_left_not_right: true, shift_top_not_bottom: false, ref_idx: ref_idx, mosaic_pattern_width: mosaic_pattern_width, search_distance: search_distance_int, tile_size: tile_size, tile_size_merge: tile_size_merge, robustness_norm: robustness_norm, read_noise: read_noise, max_motion_norm: max_motion_norm, ft_mode: ft_mode, textures: textures, final_texture: final_texture)
-            
-        try align_merge_frequency_domain(progress: progress, shift_left_not_right: false, shift_top_not_bottom: false, ref_idx: ref_idx, mosaic_pattern_width: mosaic_pattern_width, search_distance: search_distance_int, tile_size: tile_size, tile_size_merge: tile_size_merge, robustness_norm: robustness_norm, read_noise: read_noise, max_motion_norm: max_motion_norm, ft_mode: ft_mode, textures: textures, final_texture: final_texture)
-   
+        // perform align and merge 4 times in a row with slight displacement of the frame to prevent artifacts in the merging process. The shift equals the tile size used in the merging process here, which later translates into tile_size_merge/2 when each color channel is processed independently
+        try align_merge_frequency_domain(progress: progress, shift_left_not_right: true, shift_top_not_bottom: true, ref_idx: ref_idx, search_distance: search_distance_int, robustness_norm: robustness_norm, read_noise: read_noise, max_motion_norm: max_motion_norm, ft_mode: ft_mode, textures: textures, final_texture: final_texture, tile_info_merge: tile_info_merge, buffers: buffers, pad_align: pad_align, crop_merge: crop_merge, downscale_factor_array: downscale_factor_array, tile_size_array: tile_size_array, search_dist_array: search_dist_array)
+        
+        try align_merge_frequency_domain(progress: progress, shift_left_not_right: false, shift_top_not_bottom: true, ref_idx: ref_idx, search_distance: search_distance_int, robustness_norm: robustness_norm, read_noise: read_noise, max_motion_norm: max_motion_norm, ft_mode: ft_mode, textures: textures, final_texture: final_texture, tile_info_merge: tile_info_merge, buffers: buffers, pad_align: pad_align, crop_merge: crop_merge, downscale_factor_array: downscale_factor_array, tile_size_array: tile_size_array, search_dist_array: search_dist_array)
+        
+        try align_merge_frequency_domain(progress: progress, shift_left_not_right: true, shift_top_not_bottom: false, ref_idx: ref_idx, search_distance: search_distance_int, robustness_norm: robustness_norm, read_noise: read_noise, max_motion_norm: max_motion_norm, ft_mode: ft_mode, textures: textures, final_texture: final_texture, tile_info_merge: tile_info_merge, buffers: buffers, pad_align: pad_align, crop_merge: crop_merge, downscale_factor_array: downscale_factor_array, tile_size_array: tile_size_array, search_dist_array: search_dist_array)
+        
+        try align_merge_frequency_domain(progress: progress, shift_left_not_right: false, shift_top_not_bottom: false, ref_idx: ref_idx, search_distance: search_distance_int, robustness_norm: robustness_norm, read_noise: read_noise, max_motion_norm: max_motion_norm, ft_mode: ft_mode, textures: textures, final_texture: final_texture, tile_info_merge: tile_info_merge, buffers: buffers, pad_align: pad_align, crop_merge: crop_merge, downscale_factor_array: downscale_factor_array, tile_size_array: tile_size_array, search_dist_array: search_dist_array)
         
     // sophisticated approach with alignment of tiles and merging of tiles in the spatial domain (when pattern is not 2x2 Bayer)
     } else {
@@ -495,8 +500,7 @@ func generate_pyramid_buffers(with_metadata_from ref_texture: MTLTexture, with_d
     return (_ref_pyramid, _comp_pyramid)
 }
 
-
-func create_buffers(ref_texture: MTLTexture, shift_left_not_right: Bool, shift_top_not_bottom: Bool, mosaic_pattern_width: Int, search_distance: Int, tile_size: Int, tile_size_merge: Int) -> (FrequencyMergeTextureBuffers, DirectionalPadValues, DirectionalPadValues, DimensionalPadValues, TileInfo, Array<Int>, Array<Int>, Array<Int>) {
+func create_buffers(ref_texture: MTLTexture, mosaic_pattern_width: Int, search_distance: Int, tile_size: Int, tile_size_merge: Int) -> (FrequencyMergeTextureBuffers, DimensionalPadValues, DimensionalPadValues, TileInfo, Array<Int>, Array<Int>, Array<Int>) {
     // set original texture size
     let texture_width_orig = ref_texture.width
     let texture_height_orig = ref_texture.height
@@ -549,23 +553,9 @@ func create_buffers(ref_texture: MTLTexture, shift_left_not_right: Bool, shift_t
         n_pos_2d: 0
     )
     
-    let shift = DirectionalPadValues(left:   shift_left_not_right ? tile_size_merge : 0,
-                                     right:  shift_left_not_right ? 0               : tile_size_merge,
-                                     top:    shift_top_not_bottom ? tile_size_merge : 0,
-                                     bottom: shift_top_not_bottom ? 0               : tile_size_merge)
-
-    // add shifts for artifact suppression
-    let pad = DirectionalPadValues(left:   pad_align.x + shift.left,
-                                   right:  pad_align.x + shift.right,
-                                   top:    pad_align.y + shift.top,
-                                   bottom: pad_align.y + shift.bottom)
-    
-    // TODO: Despite not immediately looking like it, all of the textures are independant of the value of `shift_left_not_right` and `shift_top_not_bottom`.
-    //       The padding is always the same, the only impact those values have is how the orignal texture is placed within the
-    
     let ref_texture_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r32Float,
-                                                                          width:  texture_width_orig + pad.left + pad.right,
-                                                                          height: texture_height_orig + pad.top  + pad.bottom,
+                                                                          width:  texture_width_orig + 2*pad_align.x + tile_size_merge,
+                                                                          height: texture_height_orig + 2*pad_align.y + tile_size_merge,
                                                                           mipmapped: false)
     ref_texture_descriptor.usage = [.shaderRead, .shaderWrite]
     let _ref_texture = device.makeTexture(descriptor: ref_texture_descriptor)!
@@ -631,19 +621,22 @@ func create_buffers(ref_texture: MTLTexture, shift_left_not_right: Bool, shift_t
         comp_pyramid: _comp_pyramid
     )
     
-    return (buffers, pad, shift, crop_merge, tile_info_merge, downscale_factor_array, tile_size_array, search_dist_array)
+    return (buffers, crop_merge, pad_align, tile_info_merge, downscale_factor_array, tile_size_array, search_dist_array)
 }
 
 // convenience function for the frequency-based merging approach
-func align_merge_frequency_domain(progress: ProcessingProgress, shift_left_not_right: Bool, shift_top_not_bottom: Bool, ref_idx: Int, mosaic_pattern_width: Int, search_distance: Int, tile_size: Int, tile_size_merge: Int, robustness_norm: Double, read_noise: Double, max_motion_norm: Double, ft_mode: String, textures: [MTLTexture], final_texture: MTLTexture) throws {
+func align_merge_frequency_domain(progress: ProcessingProgress, shift_left_not_right: Bool, shift_top_not_bottom: Bool, ref_idx: Int, search_distance: Int, robustness_norm: Double, read_noise: Double, max_motion_norm: Double, ft_mode: String, textures: [MTLTexture], final_texture: MTLTexture, tile_info_merge: TileInfo, buffers: FrequencyMergeTextureBuffers, pad_align: DimensionalPadValues, crop_merge: DimensionalPadValues, downscale_factor_array: Array<Int>, tile_size_array: Array<Int>, search_dist_array: Array<Int>) throws {
+
+    let shift = DirectionalPadValues(left:   shift_left_not_right ? tile_info_merge.tile_size_merge : 0,
+                                     right:  shift_left_not_right ? 0                               : tile_info_merge.tile_size_merge,
+                                     top:    shift_top_not_bottom ? tile_info_merge.tile_size_merge : 0,
+                                     bottom: shift_top_not_bottom ? 0                               : tile_info_merge.tile_size_merge)
     
-    let (buffers, pad, shift, crop_merge, tile_info_merge, downscale_factor_array, tile_size_array, search_dist_array) = create_buffers(ref_texture: textures[ref_idx],
-                      shift_left_not_right: shift_left_not_right,
-                      shift_top_not_bottom: shift_top_not_bottom,
-                      mosaic_pattern_width: mosaic_pattern_width,
-                      search_distance: search_distance,
-                      tile_size: tile_size,
-                      tile_size_merge: tile_size_merge)
+    // add shifts for artifact suppression
+    let pad = DirectionalPadValues(left:   pad_align.x + shift.left,
+                                   right:  pad_align.x + shift.right,
+                                   top:    pad_align.y + shift.top,
+                                   bottom: pad_align.y + shift.bottom)
     
     // set and extend reference texture
     extend_texture(textures[ref_idx], onto: buffers.ref_texture, pad.left, pad.top)
@@ -669,7 +662,6 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left_not_r
     
     // iterate over comparison images
     for comp_idx in 0..<textures.count {
-  
         let t0 = DispatchTime.now().uptimeNanoseconds
         
         // if comparison image is equal to reference image, do nothing
@@ -695,7 +687,7 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left_not_r
         let mismatch_texture = calculate_mismatch_rgba(buffers.aligned_rgba_texture, buffers.ref_rgba_texture, rms_texture, tile_info_merge)
 
         // normalize mismatch texture
-        let mean_mismatch = texture_mean(crop_texture(mismatch_texture, shift.left/tile_size_merge, shift.right/tile_size_merge, shift.top/tile_size_merge, shift.bottom/tile_size_merge), "r")
+        let mean_mismatch = texture_mean(crop_texture(mismatch_texture, shift.left/tile_info_merge.tile_size_merge, shift.right/tile_info_merge.tile_size_merge, shift.top/tile_info_merge.tile_size_merge, shift.bottom/tile_info_merge.tile_size_merge), "r")
         normalize_mismatch(mismatch_texture, mean_mismatch)
            
         // add mismatch texture to the total, accumulated mismatch texture
