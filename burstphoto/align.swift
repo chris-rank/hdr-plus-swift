@@ -88,6 +88,13 @@ struct FrequencyMergeTextureBuffers {
     let comp_pyramid: Array<MTLTexture>
 }
 
+struct PyramidInfo {
+    let tile_sizes: Array<Int>
+    let search_dist: Array<Int>
+    let downscale_factors: Array<Int>
+    let tile_factor: Int
+}
+
 // class to store the progress of the align+merge
 class ProcessingProgress: ObservableObject {
     @Published var int = 0
@@ -461,13 +468,6 @@ func generate_pyramid_buffers(with_metadata_from ref_texture: MTLTexture, with_p
     }
     
     return (_ref_pyramid, _comp_pyramid)
-}
-
-struct PyramidInfo {
-    let tile_sizes: Array<Int>
-    let search_dist: Array<Int>
-    let downscale_factors: Array<Int>
-    let tile_factor: Int
 }
 
 func create_downscaling_pyramid_info(ref_texture: MTLTexture, mosaic_pattern_width: Int, tile_size: Int, search_distance: Int) -> PyramidInfo {
@@ -1393,10 +1393,6 @@ func forward_ft(_ in_texture: MTLTexture, save_in out_texture_ft: MTLTexture, _ 
 
 func backward_ft(_ in_texture_ft: MTLTexture, save_in out_texture: MTLTexture, _ tmp_texture_ft: MTLTexture, _ tile_info: TileInfo, _ n_textures: Int, mode: String) {
     
-//    let out_texture_descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba32Float, width: in_texture_ft.width/2, height: in_texture_ft.height, mipmapped: false)
-//    out_texture_descriptor.usage = [.shaderRead, .shaderWrite]
-//    let out_texture = device.makeTexture(descriptor: out_texture_descriptor)!
-    
     let command_buffer = command_queue.makeCommandBuffer()!
     let command_encoder = command_buffer.makeComputeCommandEncoder()!
     // either use discrete Fourier transform or highly-optimized fast Fourier transform
@@ -1412,8 +1408,6 @@ func backward_ft(_ in_texture_ft: MTLTexture, save_in out_texture: MTLTexture, _
     command_encoder.dispatchThreads(threads_per_grid, threadsPerThreadgroup: threads_per_thread_group)
     command_encoder.endEncoding()
     command_buffer.commit()
-    
-//    return out_texture
 }
 
 
