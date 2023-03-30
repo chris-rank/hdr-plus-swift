@@ -649,13 +649,6 @@ func align_merge_frequency_domain(progress: ProcessingProgress, shift_left_not_r
         // set and extend comparison texture
         extend_texture(textures[comp_idx], onto: buffers.comp_texture, pad.left, pad.top)
         
-        // check that the comparison image has the same resolution as the reference image
-        // TODO: This should to beginning of the application as part of file IO
-        if (buffers.ref_texture.width != buffers.comp_texture.width)
-            || (buffers.ref_texture.height != buffers.comp_texture.height) {
-            throw AlignmentError.inconsistent_resolutions
-        }
-        
         // align comparison texture
         align_texture(buffers.ref_pyramid, buffers.comp_pyramid, buffers.comp_texture, save_in: buffers.aligned_texture, pyramid_info)
         convert_rgba(buffers.aligned_texture, save_in: buffers.aligned_rgba_texture, crop_merge.x, crop_merge.y)

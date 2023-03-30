@@ -60,6 +60,14 @@ func load_images(_ urls: [URL]) throws -> ([MTLTexture], Int) {
         }
     }
     
+    // Verify that all textures are of the same size
+    for i in 1..<textures_list.count {
+        if (textures_list[0].width != textures_list[i].width)
+            || (textures_list[0].height != textures_list[i].height) {
+            throw AlignmentError.inconsistent_resolutions
+        }
+    }
+    
     return (textures_list, mosaic_pattern_width!)
 }
 
