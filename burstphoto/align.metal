@@ -240,6 +240,18 @@ kernel void add_texture(texture2d<float, access::read> in_texture [[texture(0)]]
     out_texture.write(color_value, gid);
 }
 
+kernel void add_crop(texture2d<float, access::read> in_texture [[texture(0)]],
+                     texture2d<float, access::read_write> out_texture [[texture(1)]],
+                     constant int& x_offset [[buffer(0)]],
+                     constant int& y_offset [[buffer(1)]],
+                     uint2 gid [[thread_position_in_grid]]) {
+      
+    int x = gid.x + x_offset;
+    int y = gid.y + y_offset;
+  
+    float color_value = in_texture.read(uint2(x, y)).r + out_texture.read(gid).r;
+    out_texture.write(color_value, gid);
+}
 
 kernel void copy_texture(texture2d<float, access::read> in_texture [[texture(0)]],
                          texture2d<float, access::write> out_texture [[texture(1)]],
