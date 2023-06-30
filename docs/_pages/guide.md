@@ -41,7 +41,9 @@ There are five settings in the preferences panel of the app. Their default value
 ### Tips
 - To achieve the highest dynamic range, either underexpose your images or use a burst with bracketed exposure. Shadows can typically be boosted but if the highlights are clipped, they cannot be recovered in post.
 - Bursts with uniform exposure may be the better choice for night scenes as each frame can have a maxed out exposure time while bursts with bracketed exposure may be more suitable for daylight HDR scenes where one frame can best capture the highlights while another frame can best capture the shadows.  
-- Typical bursts with bracketed exposure may span a range of 4 EV (e.g. from -2 EV to +2 EV) and should be captured at a constant ISO value (ideally at base ISO, the extended ISO range is not supported).
+- Typical bursts with bracketed exposure may span a range of 4 EV (e.g. from -2 EV to +2 EV) and should be captured at a constant ISO value (ideally at base ISO, see the Troubleshooting section below for information about extended ISO range support).
+- It's reccomended you have you camera shoot the bracketed burst automatically, rather than turning the dial manually if there movemnt in the scene in order to minimize it.
+- To get the most out of your image, it's reccomended that you expose to the right. But keep in mind that the histogram on your camera is probably giving you information based on the *JPE* output and *not the RAW*. One way to get around this is to apply a log picture profile, if your camera supports it. Note that this may increase the minimum ISO you can use.
 - The default `Tile size` („Medium“) and `Search distance` („Medium“) usually work very well.
 - To improve tonality in the shadows, you can experiment with the various `Exposure control` options ("Linear (default)" is the recommended starting point).
 - `Exposure control` only works if several exposure metadata information can be extracted correctly from the DNG. If you get any color casts for your files, you can try the setting „Off“, try the linear correction modes and/or use only bursts with uniform exposure. The setting "Off" should only be used as a fallback solution in case the setting "Linear (default)" exhibits artifacts. 
@@ -57,3 +59,23 @@ Some example configurations and potential applications are shown in the table be
 | bracketed exposure; NR: 1 to 22        | ++   | ++  | daylight HDR scene |
 | uniform exposure; NR: simple average   | +++  | -   | static scene with tripod, virtual long exposure |
 | bracketed exposure; NR: simple average | ++++ | --  | static HDR scene with tripod |
+
+### Troubleshooting
+**Problem:** The final image is coming out with a color tint when shooting a bracketed burst.
+**Likely cause:** The camera you're using does not report the white and black levels in a standard way and thus the software is not set up to handle it, leading to color casts in the resulting RAW.
+**Available options:**
+1. The reccomended approach for the time being is, unfortunately, to not use bracketed bursts.
+2. You may be able to remove the cast when opening it in your editor of choice, but we may no promises.
+3. If you are knowledge about how to handle this, please reach out.
+
+**Problem:** Strange looking, very high contrast, posterized images when shooting at a high ISO.
+**Likely cause:** *Some but not all* of the images in the burst are shot at an ISO in the regular range for your camera while others are shot in the extended range.
+**Available options:**
+1. Shoot all images in a burst either in the standard range or the extended range. For your current burst, split the images into two groups (extended and standard range) and use only one of the two for the merging.
+2. Get in touch if you know how to properly handle the extended range for cameras.
+
+**Problem:** Color casts show up in regions where one of the images have blown highlights (e.g. the headlights of a car which moves between frames).
+**Likely cause:** Temporal averaging is done with a camera that does not properly report black and white levels, or `Exposure control` is set to `Off`.
+**Available options:**
+1. Set `Exposure control` to at least `Linear` (if the camera supports it).
+2. Use the `Fast` merging algorithm with noise reduction set to 22.
